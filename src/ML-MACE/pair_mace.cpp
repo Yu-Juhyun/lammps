@@ -30,6 +30,22 @@
 #include <iostream>
 #include <stdexcept>
 
+/***********************************************************************
+ *                                                                     *
+ *    ██████  ███████ ██████      ███████ ██   ██ ████████             *
+ *   ██    ██ ██      ██   ██     ██       ██ ██     ██                *
+ *   ██    ██ █████   ██████      █████     ███      ██                *
+ *   ██ ▄▄ ██ ██      ██   ██     ██       ██ ██     ██                *
+ *    ██████  ███████ ██████      ███████ ██   ██    ██                *
+ *       ▀▀                                                            *
+ *   QEq EXTENSION - Include header for charge functionality           *
+ *                                                                     *
+ ***********************************************************************/
+#include "mace_qeq.h"
+/***********************************************************************
+ *                      END QEq EXTENSION                              *
+ ***********************************************************************/
+
 using namespace LAMMPS_NS;
 
 /* ---------------------------------------------------------------------- */
@@ -216,6 +232,23 @@ void PairMACE::compute(int eflag, int vflag)
   input.insert("shifts", shifts);
   input.insert("unit_shifts", unit_shifts);
   input.insert("weight", weight);
+
+  /***********************************************************************
+   *                                                                     *
+   *    ██████  ███████ ██████      ███████ ██   ██ ████████             *
+   *   ██    ██ ██      ██   ██     ██       ██ ██     ██                *
+   *   ██    ██ █████   ██████      █████     ███      ██                *
+   *   ██ ▄▄ ██ ██      ██   ██     ██       ██ ██     ██                *
+   *    ██████  ███████ ██████      ███████ ██   ██    ██                *
+   *       ▀▀                                                            *
+   *   QEq EXTENSION - Add total_charge to model input                   *
+   *                                                                     *
+   ***********************************************************************/
+  MACEQEq::add_total_charge_input(input, total_charge, torch_float_dtype, device);
+  /***********************************************************************
+   *                      END QEq EXTENSION                              *
+   ***********************************************************************/
+
   auto output = model.forward({input, mask.to(device), bool(vflag_global)}).toGenericDict();
 
   // mace energy
@@ -259,6 +292,56 @@ void PairMACE::compute(int eflag, int vflag)
     virial[5] += 0.5*(vir[0][2][1].item<double>() + vir[0][1][2].item<double>());
   }
 
+  /***********************************************************************
+   *                                                                     *
+   *    ██████  ███████ ██████      ███████ ██   ██ ████████             *
+   *   ██    ██ ██      ██   ██     ██       ██ ██     ██                *
+   *   ██    ██ █████   ██████      █████     ███      ██                *
+   *   ██ ▄▄ ██ ██      ██   ██     ██       ██ ██     ██                *
+   *    ██████  ███████ ██████      ███████ ██   ██    ██                *
+   *       ▀▀                                                            *
+   *   QEq EXTENSION - Extract charges from model output                 *
+   *                                                                     *
+   ***********************************************************************/
+  MACEQEq::extract_charges(output, atom->q, atom->q_flag, list->ilist, list->inum);
+  /***********************************************************************
+   *                      END QEq EXTENSION                              *
+   ***********************************************************************/
+
+  /***********************************************************************
+   *                                                                     *
+   *    ██████  ███████ ██████      ███████ ██   ██ ████████             *
+   *   ██    ██ ██      ██   ██     ██       ██ ██     ██                *
+   *   ██    ██ █████   ██████      █████     ███      ██                *
+   *   ██ ▄▄ ██ ██      ██   ██     ██       ██ ██     ██                *
+   *    ██████  ███████ ██████      ███████ ██   ██    ██                *
+   *       ▀▀                                                            *
+   *   QEq EXTENSION - Extract chi and eta to fix property/atom          *
+   *                                                                     *
+   *   Usage in LAMMPS input:                                            *
+   *     fix chi_prop all property/atom d_chi                            *
+   *     fix eta_prop all property/atom d_eta                            *
+   *     dump 1 all custom 100 dump.lammpstrj id type x y z q d_chi d_eta*
+   *                                                                     *
+   ***********************************************************************/
+  {
+    // Get pointers to d_chi and d_eta arrays (nullptr if not defined)
+    // find_custom returns index and sets type (0=int, 1=double) and style (0=vector, 1=array)
+    int idx_chi, idx_eta;
+    int type_chi, style_chi, type_eta, style_eta;
+    
+    idx_chi = atom->find_custom("chi", type_chi, style_chi);
+    idx_eta = atom->find_custom("eta", type_eta, style_eta);
+    
+    double* chi_ptr = (idx_chi >= 0 && type_chi == 1) ? atom->dvector[idx_chi] : nullptr;
+    double* eta_ptr = (idx_eta >= 0 && type_eta == 1) ? atom->dvector[idx_eta] : nullptr;
+    
+    MACEQEq::extract_chi_eta(output, chi_ptr, eta_ptr, list->ilist, list->inum);
+  }
+  /***********************************************************************
+   *                      END QEq EXTENSION                              *
+   ***********************************************************************/
+
   // mace site virials
   //   -> not available
   if (vflag_atom) {
@@ -270,15 +353,50 @@ void PairMACE::compute(int eflag, int vflag)
 
 void PairMACE::settings(int narg, char **arg)
 {
-  if (narg > 1) {
+  /***********************************************************************
+   *                                                                     *
+   *    ██████  ███████ ██████      ███████ ██   ██ ████████             *
+   *   ██    ██ ██      ██   ██     ██       ██ ██     ██                *
+   *   ██    ██ █████   ██████      █████     ███      ██                *
+   *   ██ ▄▄ ██ ██      ██   ██     ██       ██ ██     ██                *
+   *    ██████  ███████ ██████      ███████ ██   ██    ██                *
+   *       ▀▀                                                            *
+   *   QEq EXTENSION - Changed max args from 1 to 2                      *
+   *                                                                     *
+   ***********************************************************************/
+  if (narg > 2) {  // MODIFIED: was "narg > 1"
     error->all(FLERR, "Too many pair_style arguments for pair_style mace.");
   }
 
-  if (narg == 1) {
-    if (strcmp(arg[0], "no_domain_decomposition") == 0) {
+  // QEq EXTENSION - Initialize total_charge
+  total_charge = 0.0;
+  /***********************************************************************
+   *                      END QEq EXTENSION                              *
+   ***********************************************************************/
+
+  for (int i = 0; i < narg; i++) {
+    if (strcmp(arg[i], "no_domain_decomposition") == 0) {
       domain_decomposition = false;
       // TODO: add check against MPI rank
-    } else {
+    }
+    /***********************************************************************
+     *                                                                     *
+     *    ██████  ███████ ██████      ███████ ██   ██ ████████             *
+     *   ██    ██ ██      ██   ██     ██       ██ ██     ██                *
+     *   ██    ██ █████   ██████      █████     ███      ██                *
+     *   ██ ▄▄ ██ ██      ██   ██     ██       ██ ██     ██                *
+     *    ██████  ███████ ██████      ███████ ██   ██    ██                *
+     *       ▀▀                                                            *
+     *   QEq EXTENSION - Parse total_charge=VALUE argument                 *
+     *                                                                     *
+     ***********************************************************************/
+    else if (MACEQEq::parse_total_charge_arg(arg[i], total_charge)) {
+      std::cout << "  - Total system charge set to: " << total_charge << std::endl;
+    }
+    /***********************************************************************
+     *                      END QEq EXTENSION                              *
+     ***********************************************************************/
+    else {
       error->all(FLERR, "Unrecognized argument for pair_style mace.");
     }
   }
